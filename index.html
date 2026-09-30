@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Team Reveal</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0b0f1a;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    user-select: none;
+  }
+
+  .board {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    grid-template-rows: repeat(2, 1fr);
+    width: 100vw;
+    height: 100vh;
+  }
+
+  .tile {
+    position: relative;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    perspective: 1400px;
+    overflow: hidden;
+  }
+
+  /* Picture layer sits under the card and stays hidden until the card is removed */
+  .picture {
+    position: absolute;
+    inset: 0;
+    background-size: cover;
+    background-position: center;
+    visibility: hidden;
+    opacity: 0;
+    transform: scale(1.08);
+    transition: opacity 0.6s ease 0.25s, transform 1.2s ease 0.25s;
+  }
+  .picture.fallback {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    font-size: clamp(1.5rem, 4vw, 3.5rem);
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  }
+  .tile.removed .picture {
+    visibility: visible;
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .card {
+    position: absolute;
+    inset: 0;
+    cursor: pointer;
+    transform-style: preserve-3d;
+    transition: transform 0.7s cubic-bezier(0.4, 0.2, 0.2, 1), opacity 0.5s ease;
+  }
+  .tile.flipped .card { transform: rotateY(180deg); }
+  .tile.removed .card {
+    transform: rotateY(180deg) scale(0.2) rotateZ(-12deg);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .face {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  .front {
+    background: linear-gradient(145deg, #1c2541, #0b132b);
+    color: #e0e6f5;
+    font-size: clamp(4rem, 14vw, 12rem);
+    font-weight: 900;
+  }
+  .front::after {
+    content: "";
+    position: absolute;
+    inset: 12px;
+    border: 2px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    pointer-events: none;
+  }
+  .tile:not(.flipped) .card:hover .front { background: linear-gradient(145deg, #243056, #101a38); }
+
+  .back {
+    transform: rotateY(180deg);
+    flex-direction: column;
+    gap: 0.75rem;
+    background: linear-gradient(145deg, #5a189a, #ff006e);
+    color: #fff;
+    text-align: center;
+    padding: 1rem;
+  }
+  .back .team {
+    font-size: clamp(2rem, 7vw, 6rem);
+    font-weight: 900;
+    letter-spacing: 0.04em;
+    text-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  }
+  .back .hint {
+    font-size: clamp(0.7rem, 1.1vw, 1rem);
+    opacity: 0.75;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+  }
+
+  .controls {
+    position: fixed;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 10px;
+    z-index: 10;
+    padding: 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(6px);
+  }
+  .controls button {
+    border: none;
+    border-radius: 999px;
+    padding: 10px 22px;
+    font-size: 0.95rem;
+    font-weight: 700;
+    cursor: pointer;
+    color: #fff;
+    background: #3a86ff;
+    transition: transform 0.15s ease, opacity 0.15s ease;
+  }
+  .controls button:hover:not(:disabled) { transform: translateY(-2px); }
+  .controls button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .controls #reloadBtn { background: #fb5607; }
+</style>
+</head>
+<body>
+
+<main class="board" id="board"></main>
+
+<div class="controls">
+  <button id="undoBtn" type="button" disabled>&#8630; Undo</button>
+  <button id="reloadBtn" type="button">&#10227; Reload</button>
+</div>
+
+<script>
+  // Edit team names and pictures here (image paths are relative to this file).
+  const TEAMS = [
+    { name: "PAP",        image: "images/1.jpg", colors: ["#ff006e", "#8338ec"] },
+    { name: "SAP",        image: "images/2.jpg", colors: ["#3a86ff", "#00b4d8"] },
+    { name: "WIAS",       image: "images/3.jpg", colors: ["#06d6a0", "#118ab2"] },
+    { name: "Logic Apps", image: "images/4.jpg", colors: ["#ffbe0b", "#fb5607"] },
+    { name: "Kafka",      image: "images/5.jpg", colors: ["#8338ec", "#3a0ca3"] },
+    { name: "MQ Squad",   image: "images/6.jpg", colors: ["#ef476f", "#ffd166"] },
+  ];
+
+  // Ignore a double-click that lands within this window after the flip-click
+  const MIN_FLIP_MS = 400;
+
+  const board = document.getElementById("board");
+  const undoBtn = document.getElementById("undoBtn");
+  const reloadBtn = document.getElementById("reloadBtn");
+  const history = [];
+  const flippedAt = new Map();
+
+  function buildBoard() {
+    board.innerHTML = "";
+    history.length = 0;
+    flippedAt.clear();
+
+    TEAMS.forEach((team, i) => {
+      const tile = document.createElement("section");
+      tile.className = "tile";
+      tile.dataset.index = i;
+
+      const picture = document.createElement("div");
+      picture.className = "picture";
+      const img = new Image();
+      img.onload = () => { picture.style.backgroundImage = `url("${team.image}")`; };
+      img.onerror = () => {
+        picture.classList.add("fallback");
+        picture.style.background = `linear-gradient(135deg, ${team.colors[0]}, ${team.colors[1]})`;
+        picture.textContent = team.name;
+      };
+      img.src = team.image;
+
+      const card = document.createElement("div");
+      card.className = "card";
+
+      const front = document.createElement("div");
+      front.className = "face front";
+      front.textContent = i + 1;
+
+      const back = document.createElement("div");
+      back.className = "face back";
+      back.style.background = `linear-gradient(145deg, ${team.colors[0]}, ${team.colors[1]})`;
+      const name = document.createElement("div");
+      name.className = "team";
+      name.textContent = team.name;
+      const hint = document.createElement("div");
+      hint.className = "hint";
+      hint.textContent = "double-click to reveal";
+      back.append(name, hint);
+
+      card.append(front, back);
+      tile.append(picture, card);
+      board.append(tile);
+
+      card.addEventListener("click", () => flip(tile));
+      card.addEventListener("dblclick", () => removeCard(tile));
+    });
+
+    updateUndo();
+  }
+
+  function flip(tile) {
+    if (tile.classList.contains("flipped")) return;
+    tile.classList.add("flipped");
+    flippedAt.set(tile, performance.now());
+    history.push({ tile, action: "flip" });
+    updateUndo();
+  }
+
+  function removeCard(tile) {
+    if (!tile.classList.contains("flipped") || tile.classList.contains("removed")) return;
+    if (performance.now() - flippedAt.get(tile) < MIN_FLIP_MS) return;
+    tile.classList.add("removed");
+    history.push({ tile, action: "remove" });
+    updateUndo();
+  }
+
+  function undo() {
+    const last = history.pop();
+    if (!last) return;
+    if (last.action === "remove") {
+      last.tile.classList.remove("removed");
+    } else {
+      last.tile.classList.remove("flipped");
+      flippedAt.delete(last.tile);
+    }
+    updateUndo();
+  }
+
+  function updateUndo() {
+    undoBtn.disabled = history.length === 0;
+  }
+
+  undoBtn.addEventListener("click", undo);
+  reloadBtn.addEventListener("click", buildBoard);
+  document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
+  });
+
+  buildBoard();
+</script>
+</body>
+</html>
