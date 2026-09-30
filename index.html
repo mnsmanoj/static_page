@@ -171,6 +171,8 @@
 
   // Ignore a double-click that lands within this window after the flip-click
   const MIN_FLIP_MS = 400;
+  const DBLCLICK_WAIT_MS = 250;
+  const clickTimers = new Map();
 
   const board = document.getElementById("board");
   const undoBtn = document.getElementById("undoBtn");
@@ -221,11 +223,29 @@
       tile.append(picture, card);
       board.append(tile);
 
-      card.addEventListener("click", () => flip(tile));
-      card.addEventListener("dblclick", () => removeCard(tile));
+      card.addEventListener("click", () => handleClick(tile));
+      card.addEventListener("dblclick", () => {
+        clearTimeout(clickTimers.get(tile));
+        removeCard(tile);
+      });
     });
 
     updateUndo();
+  }
+
+  function handleClick(tile) {
+    if (!tile.classList.contains("flipped")) {
+      flip(tile);
+      return;
+    }
+    // Delay flip-back so a double-click can cancel it
+    clearTimeout(clickTimers.get(tile));
+    clickTimers.set(tile, setTimeout(() => {
+      if (performance.now() - flippedAt.get(tile) < MIN_FLIP_MS) return;
+      unflip(tile);
+      history.push({ tile, action: "unflip" });
+      updateUndo();
+    }, DBLCLICK_WAIT_MS));
   }
 
   function flip(tile) {
@@ -234,6 +254,11 @@
     flippedAt.set(tile, performance.now());
     history.push({ tile, action: "flip" });
     updateUndo();
+  }
+
+  function unflip(tile) {
+    tile.classList.remove("flipped");
+    flippedAt.delete(tile);
   }
 
   function removeCard(tile) {
@@ -249,9 +274,11 @@
     if (!last) return;
     if (last.action === "remove") {
       last.tile.classList.remove("removed");
+    } else if (last.action === "unflip") {
+      last.tile.classList.add("flipped");
+      flippedAt.set(last.tile, 0);
     } else {
-      last.tile.classList.remove("flipped");
-      flippedAt.delete(last.tile);
+      unflip(last.tile);
     }
     updateUndo();
   }
